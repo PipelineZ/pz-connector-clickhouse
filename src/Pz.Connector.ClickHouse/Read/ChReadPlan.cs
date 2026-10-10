@@ -12,6 +12,9 @@ internal sealed record ChColumn(string Name, ChType Type, ReadTreatment Treatmen
 /// is self-parenthesized so a disjunctive predicate cannot bind into the watermark's AND.</summary>
 internal sealed record ChReadPlan(string Sql, IReadOnlyDictionary<string, string> Parameters)
 {
+    /// <summary>Names of the parameters bound to a DateTime/DateTime64 cursor.</summary>
+    public IReadOnlySet<string> TimestampParameters { get; init; } = new HashSet<string>();
+
     public const string LowerParameter = "pz_lower";
     public const string UpperParameter = "pz_upper";
 
@@ -50,22 +53,26 @@ internal sealed record ChReadPlan(string Sql, IReadOnlyDictionary<string, string
         bool pushPredicate, bool limitZero, ChRedactor redactor)
     {
         var parameters = new Dictionary<string, string>(StringComparer.Ordinal);
+        var timestamps = new HashSet<string>(StringComparer.Ordinal);
         var anyCast = columns.Any(c => c.Treatment.Kind == ReadKind.Cast);
 
         if (config.Query is { } query)
         {
             // Watermark and window bounds apply here too: they are correctness, not optimization.
             // Engine hints (columns, predicate, limit) are never pushed into a user's query.
-            var bounds = WatermarkTerms(config, spec, columns, redactor, parameters);
+            var bounds = WatermarkTerms(config, spec, columns, redactor, parameters, timestamps);
             if (bounds.Count == 0 && !limitZero && !anyCast)
             {
-                return new ChReadPlan(query, parameters);
+                return new ChReadPlan(query, parameters) { TimestampParameters = timestamps };
             }
 
             var inner = Inner(query);
             var queryWhere = bounds.Count == 0 ? "" : " WHERE " + string.Join(" AND ", bounds);
             return new ChReadPlan(
-                $"SELECT {(anyCast ? Projection(columns) : "*")} FROM ({inner}) AS pz_query{queryWhere}{(limitZero ? " LIMIT 0" : "")}", parameters);
+                $"SELECT {(anyCast ? Projection(columns) : "*")} FROM ({inner}) AS pz_query{queryWhere}{(limitZero ? " LIMIT 0" : "")}", parameters)
+            {
+                TimestampParameters = timestamps,
+            };
         }
 
         var projected = Pruned(hints, columns) ?? (anyCast ? columns : null);
@@ -75,12 +82,12 @@ internal sealed record ChReadPlan(string Sql, IReadOnlyDictionary<string, string
             terms.Add($"({hints.PredicateSql})");
         }
 
-        terms.AddRange(WatermarkTerms(config, spec, columns, redactor, parameters));
+        terms.AddRange(WatermarkTerms(config, spec, columns, redactor, parameters, timestamps));
 
         var select = projected is null ? "*" : Projection(projected);
         var where = terms.Count == 0 ? "" : " WHERE " + string.Join(" AND ", terms);
         var limit = limitZero ? " LIMIT 0" : hints.Limit is { } n ? $" LIMIT {n.ToString(CultureInfo.InvariantCulture)}" : "";
-        return new ChReadPlan($"SELECT {select} FROM {config.Table!.Value.Quoted}{where}{limit}", parameters);
+        return new ChReadPlan($"SELECT {select} FROM {config.Table!.Value.Quoted}{where}{limit}", parameters) { TimestampParameters = timestamps };
     }
 
     /// <summary>Settings every read sends. The wire format is fixed here, not by a <c>FORMAT</c>
@@ -116,7 +123,7 @@ internal sealed record ChReadPlan(string Sql, IReadOnlyDictionary<string, string
     }
 
     private static List<string> WatermarkTerms(ChReadConfig config, DatasetSpec spec, IReadOnlyList<ChColumn> columns,
-        ChRedactor redactor, Dictionary<string, string> parameters)
+        ChRedactor redactor, Dictionary<string, string> parameters, HashSet<string> timestamps)
     {
         var terms = new List<string>();
         if (spec.WatermarkCursor is not { } cursor || (spec.WatermarkValue is null && spec.WatermarkUpperBound is null))
@@ -134,15 +141,52 @@ internal sealed record ChReadPlan(string Sql, IReadOnlyDictionary<string, string
         {
             terms.Add($"({ChSql.Quote(column.Name)} {(spec.WatermarkLowerInclusive ? ">=" : ">")} {{{LowerParameter}:{type}}})");
             parameters[LowerParameter] = lower;
+            NoteTimestamp(column, LowerParameter, timestamps);
         }
 
         if (spec.WatermarkUpperBound is { } upper)
         {
             terms.Add($"({ChSql.Quote(column.Name)} <= {{{UpperParameter}:{type}}})");
             parameters[UpperParameter] = upper;
+            NoteTimestamp(column, UpperParameter, timestamps);
         }
 
         return terms;
+    }
+
+    private static void NoteTimestamp(ChColumn column, string parameter, HashSet<string> timestamps)
+    {
+        if (column.Type.Unwrapped.Name is "DateTime" or "DateTime64")
+        {
+            timestamps.Add(parameter);
+        }
+    }
+
+    /// <summary>The parameters as sent. The engine hands bounds over as DuckDB renders them, and a
+    /// timestamptz renders with a UTC offset (<c>2024-05-01 10:00:00+00</c>) that ClickHouse's
+    /// DateTime parameter parser refuses as trailing text. A DateTime/DateTime64 bound is therefore
+    /// normalized to the UTC instant in ClickHouse's own text form; text that does not parse as a
+    /// timestamp passes through unchanged so ClickHouse reports it.</summary>
+    public IReadOnlyDictionary<string, string> WireParameters
+    {
+        get
+        {
+            if (TimestampParameters.Count == 0)
+            {
+                return Parameters;
+            }
+
+            var wire = new Dictionary<string, string>(Parameters, StringComparer.Ordinal);
+            foreach (var name in TimestampParameters)
+            {
+                if (DateTimeOffset.TryParse(wire[name], CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var parsed))
+                {
+                    wire[name] = parsed.UtcDateTime.ToString("yyyy-MM-dd HH:mm:ss.FFFFFF", CultureInfo.InvariantCulture).TrimEnd('.');
+                }
+            }
+
+            return wire;
+        }
     }
 
     private static string Source(ChReadConfig config) =>

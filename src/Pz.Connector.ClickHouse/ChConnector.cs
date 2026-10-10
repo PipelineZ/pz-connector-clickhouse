@@ -50,7 +50,13 @@ public sealed class ChConnector : IConnector, ISourceConnector, ISinkConnector, 
           "additionalProperties": false }
         """;
 
-    public string DatasetConfigSchema => "{}";
+    public string DatasetConfigSchema => """
+        { "type": "object", "properties": {
+            "entity": { "type": "string" },
+            "query": { "type": "string" },
+            "settings": { "type": "object" } },
+          "additionalProperties": false }
+        """;
 
     public string OutputConfigSchema => "{}";
 
@@ -104,8 +110,12 @@ public sealed class ChConnector : IConnector, ISourceConnector, ISinkConnector, 
         }
     }
 
-    ValueTask<ISource> ISourceConnector.OpenAsync(ConnectorConfig config, CancellationToken ct) =>
-        throw new NotImplementedException("Task 11");
+    ValueTask<ISource> ISourceConnector.OpenAsync(ConnectorConfig config, CancellationToken ct)
+    {
+        var cfg = ParseOrThrow(config);
+        // The client belongs to the source from here on; the engine disposes the source exactly once.
+        return ValueTask.FromResult<ISource>(new ChSource(OpenClient(cfg), _loggerFactory.CreateLogger<ChSource>()));
+    }
 
     ValueTask<ISink> ISinkConnector.OpenAsync(ConnectorConfig config, CancellationToken ct) =>
         throw new NotImplementedException("Task 13");

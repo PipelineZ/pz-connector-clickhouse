@@ -85,7 +85,7 @@ internal sealed class ChSource(ChHttpClient client, ILogger logger) : ISource
         using var response = await client.SendAsync(new ChRequest($"{context}: probing", ChCodes.Read_QueryFailed)
         {
             Sql = plan.Sql,
-            Parameters = plan.WireParameters,
+            Parameters = plan.Parameters,
             Settings = ChReadPlan.Settings(config, null),
         }, ct).ConfigureAwait(false);
         await using var body = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);

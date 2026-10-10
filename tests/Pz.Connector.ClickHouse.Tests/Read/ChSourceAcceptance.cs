@@ -4,7 +4,7 @@ using Pz.Connectors.TestKit;
 namespace Pz.Connector.ClickHouse.Tests;
 
 /// <summary>TestKit source contract against the single-node fixture. <c>small</c> is 120 rows
-/// (id UInt64 0..119, ~90-char name) so a 4 KB batch target yields several batches; <c>large</c> is
+/// (id Int64 0..119, ~90-char name) so a 4 KB batch target yields several batches; <c>large</c> is
 /// 150k rows so mid-read cancellation is observable; <c>window</c> holds ids 0..10; <c>flaky</c> is a
 /// query that exceeds its own <c>max_execution_time</c> (TIMEOUT_EXCEEDED, a transient code).</summary>
 [Collection("clickhouse")]

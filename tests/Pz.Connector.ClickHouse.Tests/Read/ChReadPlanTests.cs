@@ -68,9 +68,27 @@ public sealed class ChReadPlanTests
     {
         var spec = Spec() with { WatermarkCursor = "ts", WatermarkValue = "2024-05-01 10:00:00+00", WatermarkUpperBound = "2024-05-02 00:00:00", WatermarkLowerInclusive = true };
         var plan = ChReadPlan.Build(Table, spec, new ReadHints(null, "x > 1", null), Cols(("ts", "Nullable(DateTime)"), ("x", "Int32")), true, false, ChRedactor.None);
-        Assert.Equal("SELECT toDateTime64(`ts`, 0) AS `ts`, `x` FROM `db`.`events` WHERE (x > 1) AND (`ts` >= {pz_lower:DateTime}) AND (`ts` <= {pz_upper:DateTime})", plan.Sql);
-        Assert.Equal("2024-05-01 10:00:00+00", plan.Parameters["pz_lower"]);
-        Assert.Equal("2024-05-02 00:00:00", plan.Parameters["pz_upper"]);
+        Assert.Equal("SELECT toDateTime64(`ts`, 0) AS `ts`, `x` FROM `db`.`events` WHERE (x > 1) AND (`ts` >= fromUnixTimestamp64Micro({pz_lower:Int64}, 'UTC')) AND (`ts` <= fromUnixTimestamp64Micro({pz_upper:Int64}, 'UTC'))", plan.Sql);
+        Assert.Equal("1714557600000000", plan.Parameters["pz_lower"]);
+        Assert.Equal("1714608000000000", plan.Parameters["pz_upper"]);
+    }
+
+    [Fact]
+    public void Unparseable_timestamp_bound_is_0202_naming_the_cursor()
+    {
+        var spec = Spec() with { WatermarkCursor = "ts", WatermarkValue = "yesterday-ish" };
+        var ex = Assert.Throws<PzConnectorException>(() => ChReadPlan.Build(Table, spec, ReadHints.None, Cols(("ts", "DateTime")), false, false, ChRedactor.None));
+        Assert.Contains("PZCH0202", ex.Message);
+        Assert.Contains("'ts'", ex.Message);
+    }
+
+    [Fact]
+    public void Date_cursor_still_binds_raw_text_as_its_own_type()
+    {
+        var spec = Spec() with { WatermarkCursor = "d", WatermarkValue = "2024-05-01" };
+        var plan = ChReadPlan.Build(Table, spec, ReadHints.None, Cols(("d", "Date")), false, false, ChRedactor.None);
+        Assert.Contains("(`d` > {pz_lower:Date})", plan.Sql, StringComparison.Ordinal);
+        Assert.Equal("2024-05-01", plan.Parameters["pz_lower"]);
     }
 
     [Fact]

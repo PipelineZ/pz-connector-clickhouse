@@ -18,7 +18,7 @@ internal sealed class ChPartition(ChHttpClient client, ChReadPlan plan, ChReadCo
         using var response = await client.SendAsync(new ChRequest(context, ChCodes.Read_QueryFailed)
         {
             Sql = plan.Sql,
-            Parameters = plan.WireParameters,
+            Parameters = plan.Parameters,
             Settings = ChReadPlan.Settings(config, options),
             QueryId = queryId,
         }, ct).ConfigureAwait(false);

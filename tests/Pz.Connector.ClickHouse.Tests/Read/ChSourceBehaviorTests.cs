@@ -80,6 +80,30 @@ public sealed class ChSourceBehaviorTests
     }
 
     [SkippableFact]
+    public async Task Timestamp_bounds_are_instants_whatever_the_column_timezone()
+    {
+        var db = await _ch.CreateDatabaseAsync();
+        await _ch.QueryAsync($"CREATE TABLE {db}.tk (id UInt64, ts DateTime('Asia/Tokyo')) ENGINE = MergeTree ORDER BY id");
+        await _ch.QueryAsync($"INSERT INTO {db}.tk VALUES (1, toDateTime('2024-05-01 09:00:00', 'UTC')), (2, toDateTime('2024-05-01 10:00:00', 'UTC')), (3, toDateTime('2024-05-01 11:00:00', 'UTC'))");
+        await using var source = await OpenAsync(db);
+        var spec = Spec("tk") with { WatermarkCursor = "ts", WatermarkValue = "2024-05-01 10:00:00+00" };
+        var ids = (await ReadAll(source, spec)).SelectMany(b => Enumerable.Range(0, b.Length).Select(i => ((UInt64Array)b.Column("id")).GetValue(i))).ToList();
+        Assert.Equal([3UL], ids);
+    }
+
+    [SkippableFact]
+    public async Task DateTime64_cursor_in_a_non_utc_zone_honours_lower_and_upper_bounds()
+    {
+        var db = await _ch.CreateDatabaseAsync();
+        await _ch.QueryAsync($"CREATE TABLE {db}.t64 (id UInt64, ts DateTime64(3, 'Asia/Tokyo')) ENGINE = MergeTree ORDER BY id");
+        await _ch.QueryAsync($"INSERT INTO {db}.t64 VALUES (1, toDateTime64('2024-05-01 09:00:00', 3, 'UTC')), (2, toDateTime64('2024-05-01 10:00:00', 3, 'UTC')), (3, toDateTime64('2024-05-01 11:00:00', 3, 'UTC')), (4, toDateTime64('2024-05-01 12:00:00', 3, 'UTC'))");
+        await using var source = await OpenAsync(db);
+        var spec = Spec("t64") with { WatermarkCursor = "ts", WatermarkValue = "2024-05-01 10:00:00+00", WatermarkUpperBound = "2024-05-01 11:00:00+00" };
+        var ids = (await ReadAll(source, spec)).SelectMany(b => Enumerable.Range(0, b.Length).Select(i => ((UInt64Array)b.Column("id")).GetValue(i))).ToList();
+        Assert.Equal([3UL], ids);
+    }
+
+    [SkippableFact]
     public async Task Pushdown_prunes_columns_and_filters_rows()
     {
         var db = await _ch.CreateDatabaseAsync();

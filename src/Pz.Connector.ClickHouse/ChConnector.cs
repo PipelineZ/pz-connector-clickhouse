@@ -10,11 +10,23 @@ namespace Pz.Connector.ClickHouse;
 public sealed class ChConnector : IConnector, ISourceConnector, ISinkConnector, IOutputConfigSchema
 {
     private readonly ILoggerFactory _loggerFactory;
+    private readonly Func<ChConnectionConfig, HttpClient> _httpClientFactory;
 
     public ChConnector(ILoggerFactory? loggerFactory = null)
+        : this(loggerFactory, ChHttpClient.Create)
+    {
+    }
+
+    /// <summary>Test-only: supplies the <see cref="HttpClient"/> every request goes through, so a fake
+    /// handler can stand in for the network.</summary>
+    internal ChConnector(ILoggerFactory? loggerFactory, Func<ChConnectionConfig, HttpClient> httpClientFactory)
     {
         _loggerFactory = loggerFactory ?? NullLoggerFactory.Instance;
+        _httpClientFactory = httpClientFactory;
     }
+
+    internal ChHttpClient OpenClient(ChConnectionConfig cfg) =>
+        new(_httpClientFactory(cfg), cfg, _loggerFactory.CreateLogger<ChHttpClient>());
 
     public ConnectorInfo Info { get; } = new(
         "clickhouse",
@@ -57,8 +69,40 @@ public sealed class ChConnector : IConnector, ISourceConnector, ISinkConnector, 
             ?? throw new PzConnectorException(string.Join("; ", errors), isTransient: false);
     }
 
-    public ValueTask<ConnectionCheck> CheckConnectionAsync(ConnectorConfig config, CancellationToken ct) =>
-        throw new NotImplementedException("Task 8");
+    /// <summary>Proves the credential, the cluster (when named) and reports leftovers from crashed
+    /// writes. A leftover staging table is a warning, not a failure: it costs disk, not correctness.</summary>
+    public async ValueTask<ConnectionCheck> CheckConnectionAsync(ConnectorConfig config, CancellationToken ct)
+    {
+        var errors = new List<string>();
+        var cfg = ChConnectionConfig.Parse(config, errors);
+        if (cfg is null)
+        {
+            return new ConnectionCheck(false, string.Join("; ", errors));
+        }
+
+        using var client = OpenClient(cfg);
+        try
+        {
+            var info = await ChTopology.ValidateDeploymentAsync(client, forWrites: true, ct).ConfigureAwait(false);
+            var message = $"ClickHouse {info.Version} as {info.User}{(info.IsCloud ? " (Cloud)" : "")}";
+            if (cfg.Cluster is { } cluster && await ChTopology.GetClusterAsync(client, cluster, ct).ConfigureAwait(false) is { } shape)
+            {
+                message += $", cluster {cluster}: {shape.Shards} shard(s) x {shape.Replicas} replica(s)";
+            }
+
+            var orphans = await ChTopology.OrphanStagingTablesAsync(client, cfg.Database, ct).ConfigureAwait(false);
+            if (orphans.Count > 0)
+            {
+                message += $"; warning: {orphans.Count} leftover _pz_stg_* table(s) in {cfg.Database} from interrupted writes -- safe to DROP";
+            }
+
+            return new ConnectionCheck(true, message);
+        }
+        catch (PzConnectorException ex)
+        {
+            return new ConnectionCheck(false, ex.Message);
+        }
+    }
 
     ValueTask<ISource> ISourceConnector.OpenAsync(ConnectorConfig config, CancellationToken ct) =>
         throw new NotImplementedException("Task 11");

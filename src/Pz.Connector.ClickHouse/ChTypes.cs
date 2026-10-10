@@ -1,3 +1,6 @@
+using Apache.Arrow;
+using Apache.Arrow.Types;
+
 namespace Pz.Connector.ClickHouse;
 
 /// <summary>One ClickHouse data type as <c>DESCRIBE</c>/<c>system.columns</c> print it, parsed into a
@@ -43,6 +46,98 @@ internal static partial class ChTypes
     {
         "Int8", "Int16", "Int32", "Int64", "UInt8", "UInt16", "UInt32", "UInt64",
     };
+
+    /// <summary>The ClickHouse column type a created table declares for one Arrow field. A container
+    /// (Array/Tuple/Map) is never wrapped in Nullable -- ClickHouse forbids it -- so a null list, map or
+    /// struct lands as an empty/default value (documented in the README); nullability inside a
+    /// container is kept. Time, interval, duration, dictionary, union and null types are refused:
+    /// ClickHouse has no stable equivalent (Time64 is experimental) and a silent widening would
+    /// change values.</summary>
+    public static string? ToDdl(Field field, bool forceNotNull, out string? error)
+    {
+        var inner = Inner(field.DataType, out error);
+        if (inner is null)
+        {
+            error = $"column '{field.Name}': {error}";
+            return null;
+        }
+
+        var isContainer = field.DataType is ListType or LargeListType or StructType or MapType;
+        return field.IsNullable && !forceNotNull && !isContainer ? $"Nullable({inner})" : inner;
+    }
+
+    private static string? Inner(IArrowType type, out string? error)
+    {
+        error = null;
+        switch (type)
+        {
+            case BooleanType: return "Bool";
+            case Int8Type: return "Int8";
+            case Int16Type: return "Int16";
+            case Int32Type: return "Int32";
+            case Int64Type: return "Int64";
+            case UInt8Type: return "UInt8";
+            case UInt16Type: return "UInt16";
+            case UInt32Type: return "UInt32";
+            case UInt64Type: return "UInt64";
+            case HalfFloatType or FloatType: return "Float32";
+            case DoubleType: return "Float64";
+            case Decimal128Type d: return $"Decimal({d.Precision}, {d.Scale})";
+            case Decimal256Type d when d.Precision <= 76: return $"Decimal({d.Precision}, {d.Scale})";
+            case StringType or LargeStringType or BinaryType or LargeBinaryType: return "String";
+            case FixedSizeBinaryType f: return $"FixedString({f.ByteWidth})";
+            case Date32Type or Date64Type: return "Date32";
+            case TimestampType ts:
+            {
+                var precision = ts.Unit switch { TimeUnit.Second => 0, TimeUnit.Millisecond => 3, TimeUnit.Microsecond => 6, _ => 9 };
+                return string.IsNullOrEmpty(ts.Timezone) ? $"DateTime64({precision})" : $"DateTime64({precision}, {ChSql.Literal(ts.Timezone)})";
+            }
+            case ListType l:
+                return Child(l.ValueField, out error) is { } item ? $"Array({item})" : null;
+            case LargeListType l:
+                return Child(l.ValueField, out error) is { } largeItem ? $"Array({largeItem})" : null;
+            case StructType s:
+            {
+                var parts = new List<string>();
+                foreach (var f in s.Fields)
+                {
+                    if (Child(f, out error) is not { } child)
+                    {
+                        return null;
+                    }
+
+                    parts.Add($"{ChSql.Quote(f.Name)} {child}");
+                }
+
+                return $"Tuple({string.Join(", ", parts)})";
+            }
+            case MapType m:
+            {
+                // Map keys are never null in Arrow and ClickHouse forbids Nullable keys.
+                var key = Inner(m.KeyField.DataType, out error);
+                var value = key is null ? null : Child(m.ValueField, out error);
+                return key is null || value is null ? null : $"Map({key}, {value})";
+            }
+            case DictionaryType:
+                error = "dictionary-encoded columns are not supported; decode the column (cast it to its value type) before writing";
+                return null;
+            default:
+                error = $"Arrow type '{type.Name}' has no ClickHouse column mapping; cast it in the pipeline (e.g. to varchar or timestamp)";
+                return null;
+        }
+    }
+
+    private static string? Child(Field f, out string? error)
+    {
+        var inner = Inner(f.DataType, out error);
+        if (inner is null)
+        {
+            return null;
+        }
+
+        var isContainer = f.DataType is ListType or LargeListType or StructType or MapType;
+        return f.IsNullable && !isContainer ? $"Nullable({inner})" : inner;
+    }
 
     public static ChType Parse(string text) => new Parser(text).ParseTop();
 

@@ -45,18 +45,36 @@ internal sealed class ChHttpClient(HttpClient http, ChConnectionConfig cfg, ILog
         {
             var roots = new X509Certificate2Collection();
             roots.ImportFromPemFile(caFile);
-            handler.SslOptions.RemoteCertificateValidationCallback = (_, certificate, _, errors) =>
+            handler.SslOptions.RemoteCertificateValidationCallback = (_, certificate, presented, errors) =>
             {
                 if (certificate is null || (errors & (SslPolicyErrors.RemoteCertificateNameMismatch | SslPolicyErrors.RemoteCertificateNotAvailable)) != 0)
                 {
                     return false;
                 }
 
+                // The server's own intermediates must be offered to the rebuilt chain: only the root is
+                // in the CA file, so a leaf+intermediate answer builds only through the presented set.
                 using var chain = new X509Chain();
                 chain.ChainPolicy.TrustMode = X509ChainTrustMode.CustomRootTrust;
                 chain.ChainPolicy.CustomTrustStore.AddRange(roots);
                 chain.ChainPolicy.RevocationMode = X509RevocationMode.NoCheck;
-                return chain.Build(certificate as X509Certificate2 ?? X509CertificateLoader.LoadCertificate(certificate.GetRawCertData()));
+                if (presented is not null)
+                {
+                    foreach (var element in presented.ChainElements)
+                    {
+                        chain.ChainPolicy.ExtraStore.Add(element.Certificate);
+                    }
+                }
+
+                var loaded = certificate as X509Certificate2 is null ? X509CertificateLoader.LoadCertificate(certificate.GetRawCertData()) : null;
+                try
+                {
+                    return chain.Build(loaded ?? (X509Certificate2)certificate);
+                }
+                finally
+                {
+                    loaded?.Dispose();
+                }
             };
         }
 

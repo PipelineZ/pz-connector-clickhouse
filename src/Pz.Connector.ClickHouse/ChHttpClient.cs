@@ -101,7 +101,11 @@ internal sealed class ChHttpClient(HttpClient http, ChConnectionConfig cfg, ILog
         {
             throw;
         }
-        catch (Exception ex) when (ex is HttpRequestException or IOException or OperationCanceledException)
+        catch (OperationCanceledException)
+        {
+            throw ChErrors.Aborted(cfg.Redactor, $"{request.Context} (query_id {request.QueryId})");
+        }
+        catch (Exception ex) when (ex is HttpRequestException or IOException)
         {
             throw ChErrors.Wrap(ex, cfg.Redactor, $"{request.Context} (query_id {request.QueryId})");
         }
@@ -135,11 +139,21 @@ internal sealed class ChHttpClient(HttpClient http, ChConnectionConfig cfg, ILog
         CancellationToken ct, IReadOnlyDictionary<string, string>? parameters = null)
     {
         var settings = new Dictionary<string, string> { ["default_format"] = "JSONCompactStrings" };
-        using var response = await SendAsync(new ChRequest(context, failCode) { Sql = sql, Settings = settings, Parameters = parameters }, ct)
-            .ConfigureAwait(false);
+        var request = new ChRequest(context, failCode) { Sql = sql, Settings = settings, Parameters = parameters };
+        using var response = await SendAsync(request, ct).ConfigureAwait(false);
         await using var stream = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
-        var result = await JsonSerializer.DeserializeAsync(stream, ChJsonContext.Default.ChCompactStrings, ct).ConfigureAwait(false);
-        return result?.Data ?? [];
+        try
+        {
+            var result = await JsonSerializer.DeserializeAsync(stream, ChJsonContext.Default.ChCompactStrings, ct).ConfigureAwait(false);
+            return result?.Data ?? [];
+        }
+        catch (JsonException)
+        {
+            // A proxy's HTML page answering 200; its text is not ours to echo.
+            throw new PzConnectorException(
+                ChCodes.Message(ChCodes.Remote_Transient, cfg.Redactor, $"{context} (query_id {request.QueryId}): unexpected non-JSON answer"),
+                isTransient: true);
+        }
     }
 
     /// <summary>Best effort: closing the response already aborts a running query on the server; this

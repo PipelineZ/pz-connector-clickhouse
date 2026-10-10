@@ -117,4 +117,25 @@ public sealed class ChHttpClientTests
         await Client(new() { ["cluster"] = "c1" }).KillQueryAsync("pz-abc");
         Assert.Contains("ON CLUSTER `c1`", _fake.Requests.Single().Body, StringComparison.Ordinal);
     }
+
+    [Fact]
+    public async Task A_timeout_not_caused_by_the_callers_token_is_a_transient_failure()
+    {
+        _fake.Respond = (_, _) => throw new TaskCanceledException();
+        var ex = await Assert.ThrowsAsync<PzConnectorException>(() => Client().ExecuteAsync("SELECT 1", "ctx", ChCodes.Read_QueryFailed, default));
+        Assert.True(ex.IsTransient);
+        Assert.Contains("PZCH0402", ex.Message);
+    }
+
+    [Fact]
+    public async Task A_non_json_200_answer_is_a_transient_failure_without_the_body()
+    {
+        _fake.Respond = (_, _) => FakeHandler.Json("<html>proxy page SECRETBODY</html>");
+        var ex = await Assert.ThrowsAsync<PzConnectorException>(() =>
+            Client().QueryRowsAsync("SELECT 1", "ctx", ChCodes.Read_QueryFailed, default));
+        Assert.True(ex.IsTransient);
+        Assert.Contains("PZCH0402", ex.Message);
+        Assert.Contains("unexpected non-JSON answer", ex.Message);
+        Assert.DoesNotContain("SECRETBODY", ex.Message, StringComparison.Ordinal);
+    }
 }

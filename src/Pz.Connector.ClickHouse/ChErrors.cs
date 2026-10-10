@@ -23,16 +23,18 @@ internal static partial class ChErrors
         return m.Success && int.TryParse(m.Groups["code"].Value, out var code) ? code : null;
     }
 
-    public static string Summarize(string body)
+    /// <summary>The first line of the body, redacted and then capped: redacting the full line first means
+    /// a secret that straddles the cap cannot leave its prefix behind.</summary>
+    public static string Summarize(string body, ChRedactor redactor)
     {
-        var line = body.Split('\n', 2)[0].Trim();
+        var line = redactor.Redact(body.Split('\n', 2)[0].Trim());
         return line.Length <= 500 ? line : line[..500];
     }
 
     public static PzConnectorException FromServer(int httpStatus, int? exceptionCode, string body, TimeSpan? retryAfter,
         ChRedactor redactor, string context, string failCode)
     {
-        var summary = Summarize(body);
+        var summary = Summarize(body, redactor);
         var text = exceptionCode is { } c ? $"{context}: ClickHouse error {c}: {summary}" : $"{context}: HTTP {httpStatus}: {summary}";
 
         if (exceptionCode is { } auth && IsAuthCode(auth) || exceptionCode is null && httpStatus is 401 or 403)
@@ -59,10 +61,12 @@ internal static partial class ChErrors
                 $"{nameof(ChErrors)}.{nameof(Wrap)} must not be called with {nameof(OperationCanceledException)} -- the caller rethrows cancellation unwrapped.", ex);
         }
 
-        // A certificate the client does not trust will not become trusted by retrying.
+        // A certificate the client does not trust will not become trusted by retrying. A handshake that
+        // died on a reset connection also surfaces as an AuthenticationException, but with an
+        // IOException or SocketException at or below it; that is a network fault and stays transient.
         for (var e = ex; e is not null; e = e.InnerException)
         {
-            if (e is System.Security.Authentication.AuthenticationException)
+            if (e is System.Security.Authentication.AuthenticationException && !HasTransportFault(e))
             {
                 return new PzConnectorException(ChCodes.Message(ChCodes.Remote_Unauthorized, redactor,
                     $"{context}: TLS handshake failed ({e.Message}) -- for a private CA set 'tls_ca_file' on the connection"),
@@ -73,6 +77,24 @@ internal static partial class ChErrors
         return new PzConnectorException(ChCodes.Message(ChCodes.Remote_Transient, redactor, $"{context}: {ex.Message}"),
             isTransient: true, innerException: ex);
     }
+
+    private static bool HasTransportFault(Exception from)
+    {
+        for (var e = from; e is not null; e = e.InnerException)
+        {
+            if (e is IOException or System.Net.Sockets.SocketException)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>A client-side timeout or abort that the engine did not ask for (an internal timeout, a
+    /// handler tearing the request down): nothing is wrong with the request, so a retry may succeed.</summary>
+    public static PzConnectorException Aborted(ChRedactor redactor, string context) =>
+        new(ChCodes.Message(ChCodes.Remote_Transient, redactor, $"{context}: the request was aborted before an answer arrived"), isTransient: true);
 
     private static PzConnectorException NonTransient(string code, ChRedactor redactor, string text) =>
         new(ChCodes.Message(code, redactor, text), isTransient: false);

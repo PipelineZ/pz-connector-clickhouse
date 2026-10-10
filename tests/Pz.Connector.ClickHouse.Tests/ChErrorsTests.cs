@@ -54,8 +54,8 @@ public sealed class ChErrorsTests
     public void Summarize_keeps_the_first_line_and_caps_length()
     {
         var body = "Code: 62. DB::Exception: Syntax error\nStack trace:\n0. foo";
-        Assert.Equal("Code: 62. DB::Exception: Syntax error", ChErrors.Summarize(body));
-        Assert.Equal(500, ChErrors.Summarize(new string('x', 2000)).Length);
+        Assert.Equal("Code: 62. DB::Exception: Syntax error", ChErrors.Summarize(body, R));
+        Assert.Equal(500, ChErrors.Summarize(new string('x', 2000), R).Length);
     }
 
     [Fact]
@@ -73,5 +73,26 @@ public sealed class ChErrorsTests
         Assert.False(ex.IsTransient);
         Assert.Contains("PZCH0401", ex.Message);
         Assert.Contains("tls_ca_file", ex.Message);
+    }
+
+    [Fact]
+    public void Tls_handshake_aborted_by_a_reset_stays_transient()
+    {
+        var inner = new System.Security.Authentication.AuthenticationException("handshake failed",
+            new IOException("reset", new System.Net.Sockets.SocketException(104)));
+        var ex = ChErrors.Wrap(new HttpRequestException("ssl", inner), R, "ctx");
+        Assert.True(ex.IsTransient);
+        Assert.Contains("PZCH0402", ex.Message);
+    }
+
+    [Fact]
+    public void A_secret_straddling_the_length_cap_leaves_no_prefix()
+    {
+        var password = "Zq9" + new string('k', 20) + "W7";
+        var redactor = new ChRedactor([password]);
+        var body = new string('x', 490) + password + " trailing";
+        var ex = ChErrors.FromServer(500, 60, body, null, redactor, "ctx", ChCodes.Read_QueryFailed);
+        Assert.DoesNotContain("Zq9", ex.Message, StringComparison.Ordinal);
+        Assert.Contains(ChRedactor.Mask, ex.Message, StringComparison.Ordinal);
     }
 }

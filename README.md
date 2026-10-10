@@ -136,7 +136,10 @@ ClickHouse has none across statements.
 - **`merge`** needs `keys:` and deduplicates the staged rows by key (the last row in a write wins).
   - `replacing` (default) inserts into a `ReplacingMergeTree`, creating it with a `_pz_version` column
     if missing. An existing target must be a `ReplacingMergeTree` family engine (PZCH0302).
-  - `delete_insert` deletes the keys that are being written, then inserts the new rows.
+  - `delete_insert` deletes the keys that are being written, then inserts the new rows. It is not
+    atomic: readers can briefly see the merged keys missing, and a retry converges.
+- For `merge_strategy: replacing`, ClickHouse deduplicates by the table's sorting key, so an `order_by:`
+  override must cover the merge `keys:` (the default `order_by` is the keys).
 - `engine`, `order_by` (a list of columns), `partition_by` and `settings` are used **only when the sink
   creates the table**. Against an existing table they are ignored.
 
@@ -204,13 +207,15 @@ Set `cluster:` to a name from `system.clusters`; it is checked when the connecti
 
 ## ClickHouse Cloud
 
+ClickHouse Cloud is supported by design but has not been tested against a live Cloud service.
 Use the `https://...:8443` URL. Cloud is detected automatically and tables the sink creates use plain
 engine names, which Cloud maps to `Shared*` engines. `cluster:` is rejected on Cloud (PZCH0105).
 
 ## Errors
 
-Every message has the form `clickhouse: PZCH####: <text>`. Passwords and auth headers are redacted;
-statement text is never included.
+Every message has the form `clickhouse: PZCH####: <text>`. Passwords and auth headers are redacted.
+Messages carry the context, the `query_id` and the server's one-line error text (credentials redacted),
+which may quote part of the statement, for example a syntax error in a `query:` read.
 
 | Code | Meaning |
 |---|---|

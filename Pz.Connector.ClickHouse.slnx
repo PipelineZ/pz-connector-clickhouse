@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Pz.Connector.ClickHouse/Pz.Connector.ClickHouse.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Pz.Connector.ClickHouse.Tests/Pz.Connector.ClickHouse.Tests.csproj" />
+  </Folder>
+</Solution>

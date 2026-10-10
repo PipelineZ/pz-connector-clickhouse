@@ -72,6 +72,34 @@ internal static class ChEngineArgs
         return arg;
     }
 
+    /// <summary>The same clause with its first argument replaced -- everything after that argument
+    /// (the remaining arguments, ORDER BY, SETTINGS) is kept byte for byte.</summary>
+    public static string ReplaceFirstArgument(string engineFull, string engineName, string replacement)
+    {
+        var start = engineName.Length + 1;
+        var depth = 0;
+        for (var i = start; i < engineFull.Length; i++)
+        {
+            var c = engineFull[i];
+            if (c is '\'' or '`' or '"')
+            {
+                i = SkipQuoted(engineFull, i);
+                continue;
+            }
+
+            if (c is '(' or '[')
+            {
+                depth++;
+            }
+            else if ((c is ',' && depth == 0) || (c is ')' or ']' && depth-- == 0))
+            {
+                return engineFull[..start] + replacement + engineFull[i..];
+            }
+        }
+
+        return engineFull;
+    }
+
     private static int SkipQuoted(string s, int i)
     {
         var quote = s[i];

@@ -22,4 +22,9 @@ public sealed class ChEngineArgsTests
     [InlineData("db", "db")]
     [InlineData(@"'it\'s'", "it's")]
     public void Unquote(string arg, string expected) => Assert.Equal(expected, ChEngineArgs.Unquote(arg));
+
+    [Fact]
+    public void Replace_first_argument_keeps_the_rest_verbatim() =>
+        Assert.Equal("ReplicatedMergeTree('/new', '{replica}', ver) ORDER BY id SETTINGS index_granularity = 8192",
+            ChEngineArgs.ReplaceFirstArgument("ReplicatedMergeTree('/old,x', '{replica}', ver) ORDER BY id SETTINGS index_granularity = 8192", "ReplicatedMergeTree", "'/new'"));
 }

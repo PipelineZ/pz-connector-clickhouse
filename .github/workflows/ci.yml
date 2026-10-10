@@ -50,3 +50,72 @@ jobs:
       - run: >
           dotnet test Pz.Connector.ClickHouse.slnx -c Release --no-build --filter "Category=ClickHouseCluster"
           --blame-hang --blame-hang-timeout 15m --blame-hang-dump-type mini
+
+  # The other half of the proof: a stranger declares the connector by package id, runs `pz restore`,
+  # and pz spawns the Native AOT binary against a real server. The suites above never touch pz's
+  # resolver, materializer or process host.
+  pack-and-verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    services:
+      clickhouse:
+        image: clickhouse/clickhouse-server:25.8
+        env:
+          CLICKHOUSE_USER: pz
+          CLICKHOUSE_PASSWORD: pz-e2e
+          CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: '1'
+        ports: ['8123:8123']
+        options: >-
+          --health-cmd "wget -qO- http://localhost:8123/ping || exit 1"
+          --health-interval 2s --health-timeout 2s --health-retries 30
+    env:
+      PZ_CLICKHOUSE_PASSWORD: pz-e2e
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.x'
+      - name: Publish the host RID (Native AOT) and pack
+        run: |
+          set -euo pipefail
+          # A separate `restore -r` before `publish -r --no-restore` is required on a cold NuGet
+          # cache: the restore folded into `publish -r` alone does not pull the RID-specific packs.
+          dotnet restore src/Pz.Connector.ClickHouse -r linux-x64
+          dotnet publish src/Pz.Connector.ClickHouse -c Release -r linux-x64 --no-restore
+          dotnet pack src/Pz.Connector.ClickHouse -c Release -o packages
+          VERSION="$(ls packages/Pz.Connector.ClickHouse.*.nupkg | sed -E 's|.*/Pz\.Connector\.ClickHouse\.(.*)\.nupkg|\1|')"
+          echo "PKG_VERSION=${VERSION}" >> "$GITHUB_ENV"
+          unzip -p "packages/Pz.Connector.ClickHouse.${VERSION}.nupkg" pz.connector.json | tee manifest.json
+          grep -q '"runtime": "process"' manifest.json
+          grep -q '"name": "clickhouse"' manifest.json
+          for cap in ColumnPruning PredicatePushdown BoundedWindow InclusiveWatermarkBound Merge ReplaceWrites; do
+            grep -q "\"${cap}\"" manifest.json
+          done
+          for cap in PartitionedRead Transactional; do
+            ! grep -q "\"${cap}\"" manifest.json
+          done
+      - name: Install pz, restore from the local feed, run, conformance-test
+        run: |
+          set -euo pipefail
+          dotnet tool install --global pz --version 0.9.3
+          ch() { curl -sf -H 'X-ClickHouse-User: pz' -H "X-ClickHouse-Key: ${PZ_CLICKHOUSE_PASSWORD}" --data-binary "$1" http://localhost:8123/; }
+          ch "CREATE DATABASE pz_e2e"
+          ch "CREATE TABLE pz_e2e.orders_in (id Int64, name String) ENGINE = MergeTree ORDER BY id"
+          ch "INSERT INTO pz_e2e.orders_in VALUES (1,'ann'),(2,'bob'),(3,'cy')"
+          cd tests/e2e
+          sed -i "s/0.0.0-PLACEHOLDER/${PKG_VERSION}/" project.yml
+          pz restore --feeds "${GITHUB_WORKSPACE}/packages"
+          PKG_DIR=".pz/packages/Pz.Connector.ClickHouse/${PKG_VERSION}"
+          test -f "${PKG_DIR}/native/Pz.Connector.ClickHouse"
+          pz validate
+          pz run
+          test "$(ch 'SELECT count() FROM pz_e2e.orders_out')" -eq 3
+          # Append is at-least-once: a second run lands the three again; merge stays at one row per key.
+          pz run
+          test "$(ch 'SELECT count() FROM pz_e2e.orders_out')" -eq 6
+          test "$(ch 'SELECT count() FROM pz_e2e.orders_latest FINAL')" -eq 3
+          test "$(ch "SELECT count() FROM system.tables WHERE database = 'pz_e2e' AND startsWith(name, '_pz_')")" -eq 0
+          pz connector test "${PKG_DIR}" --config probe.yml | tee report.txt
+          ! grep -q FAIL report.txt

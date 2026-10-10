@@ -1,0 +1,21 @@
+# Both directions through the packaged connector against the CI service container: read a seeded
+# table, append to an output, and merge into a second one.
+ch:
+  connector: clickhouse
+  url: http://localhost:8123
+  user: pz
+  password: ${PZ_CLICKHOUSE_PASSWORD}
+  database: pz_e2e
+  entities:
+    orders_in:
+      read:
+        entity: orders_in
+    orders_out:
+      write:
+        entity: orders_out
+        strategy: append
+    orders_latest:
+      write:
+        entity: orders_latest
+        strategy: merge
+        keys: [id]

@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <Description>ClickHouse source and sink connector for PipelineZ (pz), served out of process: Arrow over the HTTP interface both ways; append/replace/merge (ReplacingMergeTree or delete+insert); single node, ClickHouse Cloud and ON CLUSTER deployments.</Description>
+    <!-- Native AOT. PublishAot is set here as well as by PzPackaging: through the NuGet package the
+         SDK's derivation lands after restore has already decided whether to pull the ILCompiler
+         pack, and a publish without it silently falls back to a non-AOT layout. -->
+    <PzPackaging>aot</PzPackaging>
+    <PublishAot>true</PublishAot>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <!-- A relative tls_ca_file resolves against the pz project directory, which pz passes as base_dir. -->
+    <PzProjectDirectoryAnchor>true</PzProjectDirectoryAnchor>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Pz.Connectors.Sdk" Version="0.9.3" />
+    <PackageReference Include="Pz.Connectors.Abstractions" Version="0.9.3" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Pz.Connector.ClickHouse.Tests" />
+  </ItemGroup>
+
+</Project>

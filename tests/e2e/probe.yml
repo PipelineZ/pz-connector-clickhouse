@@ -1,0 +1,10 @@
+connection:
+  url: http://localhost:8123
+  user: pz
+  password: ${PZ_CLICKHOUSE_PASSWORD}
+  database: pz_e2e
+read:
+  dataset: orders_in
+write:
+  output: e2e_probe
+  mode: append

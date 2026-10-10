@@ -59,6 +59,17 @@ internal static partial class ChErrors
                 $"{nameof(ChErrors)}.{nameof(Wrap)} must not be called with {nameof(OperationCanceledException)} -- the caller rethrows cancellation unwrapped.", ex);
         }
 
+        // A certificate the client does not trust will not become trusted by retrying.
+        for (var e = ex; e is not null; e = e.InnerException)
+        {
+            if (e is System.Security.Authentication.AuthenticationException)
+            {
+                return new PzConnectorException(ChCodes.Message(ChCodes.Remote_Unauthorized, redactor,
+                    $"{context}: TLS handshake failed ({e.Message}) -- for a private CA set 'tls_ca_file' on the connection"),
+                    isTransient: false, innerException: ex);
+            }
+        }
+
         return new PzConnectorException(ChCodes.Message(ChCodes.Remote_Transient, redactor, $"{context}: {ex.Message}"),
             isTransient: true, innerException: ex);
     }

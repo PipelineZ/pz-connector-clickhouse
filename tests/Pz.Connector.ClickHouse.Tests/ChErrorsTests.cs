@@ -65,4 +65,13 @@ public sealed class ChErrorsTests
     [Fact]
     public void Wrap_makes_transport_failures_transient() =>
         Assert.True(ChErrors.Wrap(new HttpRequestException("connection refused"), R, "ctx").IsTransient);
+
+    [Fact]
+    public void Untrusted_certificate_is_permanent_with_a_tls_hint()
+    {
+        var ex = ChErrors.Wrap(new HttpRequestException("ssl", new System.Security.Authentication.AuthenticationException("remote certificate is invalid")), R, "ctx");
+        Assert.False(ex.IsTransient);
+        Assert.Contains("PZCH0401", ex.Message);
+        Assert.Contains("tls_ca_file", ex.Message);
+    }
 }

@@ -138,4 +138,39 @@ public sealed class ChReadPlanTests
         Assert.Equal("8", s["max_threads"]);
         Assert.Equal("122880", ChReadPlan.Settings(Table, BatchOptions.Default)["max_block_size"]);
     }
+
+    private static ChReadConfig Q => new(null, "select * from t;", new Dictionary<string, string>());
+
+    private static DatasetSpec Bounded() =>
+        Spec() with { WatermarkCursor = "id", WatermarkValue = "3", WatermarkUpperBound = "9" };
+
+    [Fact]
+    public void Query_mode_applies_watermark_bounds_as_typed_parameters()
+    {
+        var plan = ChReadPlan.Build(Q, Bounded(), ReadHints.None, Cols(("id", "UInt64")), false, false, ChRedactor.None);
+        Assert.Equal("SELECT * FROM (select * from t) AS pz_query WHERE (`id` > {pz_lower:UInt64}) AND (`id` <= {pz_upper:UInt64})", plan.Sql);
+        Assert.Equal("3", plan.Parameters["pz_lower"]);
+        Assert.Equal("9", plan.Parameters["pz_upper"]);
+    }
+
+    [Fact]
+    public void Query_mode_bounds_combine_with_a_cast_projection()
+    {
+        var plan = ChReadPlan.Build(Q, Bounded(), ReadHints.None, Cols(("id", "UInt64"), ("d", "Date")), false, false, ChRedactor.None);
+        Assert.Equal("SELECT `id`, toDate32(`d`) AS `d` FROM (select * from t) AS pz_query WHERE (`id` > {pz_lower:UInt64}) AND (`id` <= {pz_upper:UInt64})", plan.Sql);
+    }
+
+    [Fact]
+    public void Query_mode_bounds_never_admit_engine_hints()
+    {
+        var plan = ChReadPlan.Build(Q, Bounded(), new ReadHints(["id"], "id > 1", 5), Cols(("id", "UInt64"), ("x", "String")), true, false, ChRedactor.None);
+        Assert.Equal("SELECT * FROM (select * from t) AS pz_query WHERE (`id` > {pz_lower:UInt64}) AND (`id` <= {pz_upper:UInt64})", plan.Sql);
+    }
+
+    [Fact]
+    public void Query_mode_limit_zero_probe_keeps_bounds()
+    {
+        var plan = ChReadPlan.Build(Q, Bounded(), ReadHints.None, Cols(("id", "UInt64")), false, limitZero: true, ChRedactor.None);
+        Assert.EndsWith(" AND (`id` <= {pz_upper:UInt64}) LIMIT 0", plan.Sql, StringComparison.Ordinal);
+    }
 }

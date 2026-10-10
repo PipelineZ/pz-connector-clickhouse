@@ -54,15 +54,18 @@ internal sealed record ChReadPlan(string Sql, IReadOnlyDictionary<string, string
 
         if (config.Query is { } query)
         {
-            var inner = Inner(query);
-            if (limitZero)
+            // Watermark and window bounds apply here too: they are correctness, not optimization.
+            // Engine hints (columns, predicate, limit) are never pushed into a user's query.
+            var bounds = WatermarkTerms(config, spec, columns, redactor, parameters);
+            if (bounds.Count == 0 && !limitZero && !anyCast)
             {
-                return new ChReadPlan(anyCast
-                    ? $"SELECT {Projection(columns)} FROM ({inner}) AS pz_query LIMIT 0"
-                    : $"SELECT * FROM ({inner}) AS pz_query LIMIT 0", parameters);
+                return new ChReadPlan(query, parameters);
             }
 
-            return new ChReadPlan(anyCast ? $"SELECT {Projection(columns)} FROM ({inner}) AS pz_query" : query, parameters);
+            var inner = Inner(query);
+            var queryWhere = bounds.Count == 0 ? "" : " WHERE " + string.Join(" AND ", bounds);
+            return new ChReadPlan(
+                $"SELECT {(anyCast ? Projection(columns) : "*")} FROM ({inner}) AS pz_query{queryWhere}{(limitZero ? " LIMIT 0" : "")}", parameters);
         }
 
         var projected = Pruned(hints, columns) ?? (anyCast ? columns : null);
@@ -72,26 +75,7 @@ internal sealed record ChReadPlan(string Sql, IReadOnlyDictionary<string, string
             terms.Add($"({hints.PredicateSql})");
         }
 
-        if (spec.WatermarkCursor is { } cursor && (spec.WatermarkValue is not null || spec.WatermarkUpperBound is not null))
-        {
-            var column = columns.FirstOrDefault(c => c.Name == cursor)
-                ?? columns.FirstOrDefault(c => string.Equals(c.Name, cursor, StringComparison.OrdinalIgnoreCase))
-                ?? throw Cursor(redactor, $"watermark cursor column '{cursor}' is not in {config.Label}");
-            var type = ChTypes.CursorParameterType(column.Type)
-                ?? throw Cursor(redactor, $"watermark cursor column '{cursor}' has type {column.Type.Render()}; a cursor must be an integer, Decimal, Date, Date32, DateTime, DateTime64 or String column");
-
-            if (spec.WatermarkValue is { } lower)
-            {
-                terms.Add($"({ChSql.Quote(column.Name)} {(spec.WatermarkLowerInclusive ? ">=" : ">")} {{{LowerParameter}:{type}}})");
-                parameters[LowerParameter] = lower;
-            }
-
-            if (spec.WatermarkUpperBound is { } upper)
-            {
-                terms.Add($"({ChSql.Quote(column.Name)} <= {{{UpperParameter}:{type}}})");
-                parameters[UpperParameter] = upper;
-            }
-        }
+        terms.AddRange(WatermarkTerms(config, spec, columns, redactor, parameters));
 
         var select = projected is null ? "*" : Projection(projected);
         var where = terms.Count == 0 ? "" : " WHERE " + string.Join(" AND ", terms);
@@ -129,6 +113,36 @@ internal sealed record ChReadPlan(string Sql, IReadOnlyDictionary<string, string
         }
 
         return s;
+    }
+
+    private static List<string> WatermarkTerms(ChReadConfig config, DatasetSpec spec, IReadOnlyList<ChColumn> columns,
+        ChRedactor redactor, Dictionary<string, string> parameters)
+    {
+        var terms = new List<string>();
+        if (spec.WatermarkCursor is not { } cursor || (spec.WatermarkValue is null && spec.WatermarkUpperBound is null))
+        {
+            return terms;
+        }
+
+        var column = columns.FirstOrDefault(c => c.Name == cursor)
+            ?? columns.FirstOrDefault(c => string.Equals(c.Name, cursor, StringComparison.OrdinalIgnoreCase))
+            ?? throw Cursor(redactor, $"watermark cursor column '{cursor}' is not in {config.Label}");
+        var type = ChTypes.CursorParameterType(column.Type)
+            ?? throw Cursor(redactor, $"watermark cursor column '{cursor}' has type {column.Type.Render()}; a cursor must be an integer, Decimal, Date, Date32, DateTime, DateTime64 or String column");
+
+        if (spec.WatermarkValue is { } lower)
+        {
+            terms.Add($"({ChSql.Quote(column.Name)} {(spec.WatermarkLowerInclusive ? ">=" : ">")} {{{LowerParameter}:{type}}})");
+            parameters[LowerParameter] = lower;
+        }
+
+        if (spec.WatermarkUpperBound is { } upper)
+        {
+            terms.Add($"({ChSql.Quote(column.Name)} <= {{{UpperParameter}:{type}}})");
+            parameters[UpperParameter] = upper;
+        }
+
+        return terms;
     }
 
     private static string Source(ChReadConfig config) =>

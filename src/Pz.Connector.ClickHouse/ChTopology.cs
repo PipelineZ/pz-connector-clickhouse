@@ -56,7 +56,7 @@ internal static class ChTopology
 
     /// <summary>The checks that need the server before the first read or write. A cluster must exist
     /// and must not be named on Cloud; for writes, every node's <c>{replica}</c> macro must be unique
-    /// cluster-wide, because the staging table registers every node as a replica of one path.</summary>
+    /// cluster-wide (one distinct value per configured replica), because the staging table registers every node as a replica of one path.</summary>
     public static async Task<ChServerInfo> ValidateDeploymentAsync(ChHttpClient client, bool forWrites, CancellationToken ct)
     {
         var info = await ReadServerAsync(client, ct).ConfigureAwait(false);
@@ -79,7 +79,10 @@ internal static class ChTopology
         if (forWrites)
         {
             var rows = await client.QueryRowsAsync(
-                $"SELECT count(), uniqExact(r) FROM (SELECT getMacro('replica') AS r FROM clusterAllReplicas({ChSql.Literal(cluster)}, system.one))",
+                // clusterAllReplicas connects once per distinct address, so a host listed twice answers once;
+                // comparing against the configured replica count (system.clusters) catches that too.
+                $"SELECT (SELECT count() FROM system.clusters WHERE cluster = {ChSql.Literal(cluster)}), uniqExact(r) " +
+                $"FROM (SELECT getMacro('replica') AS r FROM clusterAllReplicas({ChSql.Literal(cluster)}, system.one))",
                 "checking replica macros", ChCodes.Read_QueryFailed, ct).ConfigureAwait(false);
             if (rows.Single()[0] != rows.Single()[1])
             {

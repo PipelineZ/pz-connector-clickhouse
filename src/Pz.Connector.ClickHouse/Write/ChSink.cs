@@ -137,9 +137,41 @@ internal sealed class ChSink(ChHttpClient client, TimeProvider time, ILogger log
         return ValueTask.CompletedTask;
     }
 
-    /// <summary>Task 14 fills this in; until then a merge is refused.</summary>
-    private ChMergePlan? ValidateMerge(OutputSpec spec, ChWriteConfig output, ChWriteTarget target, IReadOnlyList<string> names, string context) =>
-        throw Refuse(ChCodes.Write_BadWriteMode, $"{context}: strategy: merge is not available yet");
+    /// <summary>Replacing (default): the effective table must be a ReplacingMergeTree; a version column
+    /// the sink does not own must be in the write. delete_insert: any MergeTree engine.</summary>
+    private ChMergePlan ValidateMerge(OutputSpec spec, ChWriteConfig output, ChWriteTarget target, IReadOnlyList<string> names, string context)
+    {
+        if (output.MergeStrategy == ChWriteConfig.DeleteInsert)
+        {
+            return new ChMergePlan(ChWriteConfig.DeleteInsert, SupplyVersion: false);
+        }
+
+        if (target.Effective is not { } effective)
+        {
+            // The sink creates the table with its own version column (unless engine: overrides it).
+            return new ChMergePlan(ChWriteConfig.Replacing, SupplyVersion: output.Engine is null);
+        }
+
+        if (!effective.IsReplacing)
+        {
+            throw Refuse(ChCodes.Write_NotReplacing,
+                $"{context}: {effective.Ref.Display} is a {effective.Engine}, which does not deduplicate; set merge_strategy: delete_insert, or recreate the table as ReplacingMergeTree");
+        }
+
+        var version = effective.ReplacingVersionColumn;
+        if (version is null || version == ChDdl.VersionColumn)
+        {
+            return new ChMergePlan(ChWriteConfig.Replacing, SupplyVersion: version is not null);
+        }
+
+        if (!names.Contains(version, StringComparer.Ordinal))
+        {
+            throw Refuse(ChCodes.Write_TargetColumnMissing,
+                $"{context}: {effective.Ref.Display} orders versions by column '{version}', which the write does not carry; add it to the pipeline's output");
+        }
+
+        return new ChMergePlan(ChWriteConfig.Replacing, SupplyVersion: false);
+    }
 
     private async Task<ChServerInfo> ServerAsync(CancellationToken ct)
     {

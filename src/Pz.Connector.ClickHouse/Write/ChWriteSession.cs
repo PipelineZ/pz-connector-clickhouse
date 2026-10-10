@@ -150,9 +150,27 @@ internal sealed class ChWriteSession(
         await RunAsync(ChDdl.Exchange(target.Target, shadow, Ddl), "swapping the tables", ct).ConfigureAwait(false);
     }
 
-    /// <summary>Task 14 implements merge; BeginWriteAsync refuses it until then.</summary>
-    private Task MergeAsync(CancellationToken ct) =>
-        throw new InvalidOperationException("merge reached CommitAsync -- BeginWriteAsync should have refused it");
+    /// <summary>Replacing: one deduplicated INSERT ... SELECT; the table deduplicates across runs in
+    /// background merges, so readers use FINAL. delete_insert: delete the staged keys, then the same
+    /// insert -- correct without FINAL, but not atomic: between the two statements a reader can see
+    /// those keys missing; a retry converges.</summary>
+    private async Task MergeAsync(CancellationToken ct)
+    {
+        var replacing = merge!.Strategy == ChWriteConfig.Replacing;
+        var created = target.Existing is null;
+        if (created)
+        {
+            await RunAsync(Create(target.Target, replacing: replacing && output.Engine is null), "creating the target", ct).ConfigureAwait(false);
+        }
+        else if (!replacing)
+        {
+            await RunAsync(ChDdl.DeleteKeys(target.DdlTable, Ddl, spec.Keys, staging), "deleting the merged keys", ct,
+                new() { ["lightweight_deletes_sync"] = "2" }).ConfigureAwait(false);
+        }
+
+        long? version = merge.SupplyVersion ? (time.GetUtcNow().UtcTicks - DateTimeOffset.UnixEpoch.UtcTicks) / 10 : null;
+        await RunAsync(ChDdl.InsertSelect(target.Target, columns, staging, spec.Keys, version), "merging", ct, Distributed()).ConfigureAwait(false);
+    }
 
     private async Task EnsureTargetAsync(bool replacing, CancellationToken ct)
     {

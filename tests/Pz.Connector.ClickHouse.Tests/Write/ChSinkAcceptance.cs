@@ -31,6 +31,11 @@ public sealed class ChSinkAcceptance : SinkConnectorAcceptanceTests
 
     protected override OutputSpec? ReplaceOutput => new("clickhouse", "replace_out", "replace", "fail_on_change", new Dictionary<string, object?>());
 
+    protected override OutputSpec? MergeOutput =>
+        new OutputSpec("clickhouse", "merge_out", "merge", "fail_on_change", new Dictionary<string, object?>()) { Keys = ["id"] };
+
+    protected override Task ResetMergeTargetAsync() => _ch.QueryAsync($"DROP TABLE IF EXISTS {_db}.merge_out SYNC");
+
     protected override async ValueTask<IReadOnlyList<RecordBatch>> ReadCommittedAsync(ISinkConnector connector, OutputSpec spec)
     {
         var exists = (await _ch.QueryAsync($"EXISTS TABLE {_db}.{spec.Output}")).Trim() == "1";

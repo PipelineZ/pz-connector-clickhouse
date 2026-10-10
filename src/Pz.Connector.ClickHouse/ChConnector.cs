@@ -11,18 +11,20 @@ public sealed class ChConnector : IConnector, ISourceConnector, ISinkConnector, 
 {
     private readonly ILoggerFactory _loggerFactory;
     private readonly Func<ChConnectionConfig, HttpClient> _httpClientFactory;
+    private readonly TimeProvider _time;
 
     public ChConnector(ILoggerFactory? loggerFactory = null)
-        : this(loggerFactory, ChHttpClient.Create)
+        : this(loggerFactory, ChHttpClient.Create, TimeProvider.System)
     {
     }
 
     /// <summary>Test-only: supplies the <see cref="HttpClient"/> every request goes through, so a fake
     /// handler can stand in for the network.</summary>
-    internal ChConnector(ILoggerFactory? loggerFactory, Func<ChConnectionConfig, HttpClient> httpClientFactory)
+    internal ChConnector(ILoggerFactory? loggerFactory, Func<ChConnectionConfig, HttpClient> httpClientFactory, TimeProvider? time = null)
     {
         _loggerFactory = loggerFactory ?? NullLoggerFactory.Instance;
         _httpClientFactory = httpClientFactory;
+        _time = time ?? TimeProvider.System;
     }
 
     internal ChHttpClient OpenClient(ChConnectionConfig cfg) =>
@@ -58,7 +60,16 @@ public sealed class ChConnector : IConnector, ISourceConnector, ISinkConnector, 
           "additionalProperties": false }
         """;
 
-    public string OutputConfigSchema => "{}";
+    public string OutputConfigSchema => """
+        { "type": "object", "properties": {
+            "entity": { "type": "string" },
+            "merge_strategy": { "type": "string", "enum": ["replacing", "delete_insert"] },
+            "engine": { "type": "string" },
+            "order_by": { "type": "array", "items": { "type": "string" } },
+            "partition_by": { "type": "string" },
+            "settings": { "type": "object" } },
+          "additionalProperties": false }
+        """;
 
     public ValueTask<ValidationResult> ValidateAsync(ConnectorConfig config, CancellationToken ct)
     {
@@ -117,6 +128,10 @@ public sealed class ChConnector : IConnector, ISourceConnector, ISinkConnector, 
         return ValueTask.FromResult<ISource>(new ChSource(OpenClient(cfg), _loggerFactory.CreateLogger<ChSource>()));
     }
 
-    ValueTask<ISink> ISinkConnector.OpenAsync(ConnectorConfig config, CancellationToken ct) =>
-        throw new NotImplementedException("Task 13");
+    ValueTask<ISink> ISinkConnector.OpenAsync(ConnectorConfig config, CancellationToken ct)
+    {
+        var cfg = ParseOrThrow(config);
+        // The client belongs to the sink from here on; the engine disposes the sink exactly once.
+        return ValueTask.FromResult<ISink>(new ChSink(OpenClient(cfg), _time, _loggerFactory.CreateLogger<ChSink>()));
+    }
 }

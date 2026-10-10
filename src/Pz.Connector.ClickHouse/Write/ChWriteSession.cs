@@ -165,7 +165,7 @@ internal sealed class ChWriteSession(
         else if (!replacing)
         {
             await RunAsync(ChDdl.DeleteKeys(target.DdlTable, Ddl, spec.Keys, staging), "deleting the merged keys", ct,
-                new() { ["lightweight_deletes_sync"] = "2" }).ConfigureAwait(false);
+                new() { ["lightweight_deletes_sync"] = "2", ["allow_nondeterministic_mutations"] = "1" }).ConfigureAwait(false);
         }
 
         long? version = merge.SupplyVersion ? (time.GetUtcNow().UtcTicks - DateTimeOffset.UnixEpoch.UtcTicks) / 10 : null;

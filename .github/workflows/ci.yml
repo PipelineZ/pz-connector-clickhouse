@@ -94,7 +94,7 @@ jobs:
             grep -q "\"${cap}\"" manifest.json
           done
           for cap in PartitionedRead Transactional; do
-            ! grep -q "\"${cap}\"" manifest.json
+            if grep -q "\"${cap}\"" manifest.json; then echo "unexpected capability ${cap} in the manifest"; exit 1; fi
           done
       - name: Install pz, restore from the local feed, run, conformance-test
         run: |
@@ -118,4 +118,4 @@ jobs:
           test "$(ch 'SELECT count() FROM pz_e2e.orders_latest FINAL')" -eq 3
           test "$(ch "SELECT count() FROM system.tables WHERE database = 'pz_e2e' AND startsWith(name, '_pz_')")" -eq 0
           pz connector test "${PKG_DIR}" --config probe.yml | tee report.txt
-          ! grep -q FAIL report.txt
+          if grep -q FAIL report.txt; then exit 1; fi

@@ -106,7 +106,7 @@ jobs:
             grep -q "\"${cap}\"" manifest.json
           done
           for cap in PartitionedRead Transactional; do
-            ! grep -q "\"${cap}\"" manifest.json
+            if grep -q "\"${cap}\"" manifest.json; then echo "unexpected capability ${cap} in the manifest"; exit 1; fi
           done
           for rid in linux-x64 linux-arm64 osx-arm64 win-x64; do
             grep -q "\"${rid}\":" manifest.json

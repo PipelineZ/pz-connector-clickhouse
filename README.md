@@ -234,8 +234,8 @@ statement text is never included.
 | PZCH0306 | The database engine has no `EXCHANGE TABLES`, so `replace` cannot run. |
 | PZCH0307 | Invalid write option (unknown key, bad `merge_strategy` or `order_by`). |
 | PZCH0308 | Merge keys: none given, not in the write schema, or a reserved column name. |
-| PZCH0401 | Permanent authentication, authorization or TLS failure (ClickHouse 516/192, HTTP 401/403, an untrusted certificate). An untrusted certificate carries a `tls_ca_file` hint. |
-| PZCH0402 | Transient failure that pz retries: HTTP 429/502/503/504, socket errors and timeouts, `TOO_MANY_PARTS`, read-only tables, Keeper errors. Honors `Retry-After`. |
+| PZCH0401 | Permanent authentication, authorization or TLS failure (ClickHouse codes 516, 192, 194, HTTP 401/403, an untrusted certificate). An untrusted certificate carries a `tls_ca_file` hint. |
+| PZCH0402 | Transient failure that pz retries: HTTP 429/502/503/504, and ClickHouse codes 159 (timeout exceeded), 209 (socket timeout), 210 (network error), 242 (table is read-only), 252 (too many parts), 202 (too many simultaneous queries) and 999 (Keeper exception). Honors `Retry-After`. |
 
 ## Leftovers
 
@@ -246,4 +246,4 @@ drop:
 - `*__pz_new_*`: replace shadow tables.
 - `_pz_front_*`: transient `Distributed` fronts used by replace on a `Distributed` target.
 
-`pz connector check` warns when `_pz_stg_*` tables exist in the connection's database.
+The connection check that pz runs under `pz validate --connect` warns when `_pz_stg_*` tables exist in the connection's database.

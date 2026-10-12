@@ -2,6 +2,7 @@ using System.Reflection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Pz.Connectors.Abstractions;
+using Pz.Connectors.Sdk;
 
 namespace Pz.Connector.ClickHouse;
 
@@ -13,8 +14,8 @@ public sealed class ChConnector : IConnector, ISourceConnector, ISinkConnector, 
     private readonly Func<ChConnectionConfig, HttpClient> _httpClientFactory;
     private readonly TimeProvider _time;
 
-    public ChConnector(ILoggerFactory? loggerFactory = null)
-        : this(loggerFactory, ChHttpClient.Create, TimeProvider.System)
+    public ChConnector(ILoggerFactory? loggerFactory = null, RemoteCalls? remote = null)
+        : this(loggerFactory, cfg => ChHttpClient.Create(cfg, remote is null ? null : inner => remote.HttpHandler(inner)), TimeProvider.System)
     {
     }
 
@@ -37,7 +38,8 @@ public sealed class ChConnector : IConnector, ISourceConnector, ISinkConnector, 
 
     public ConnectorCapabilities Capabilities =>
         ConnectorCapabilities.ColumnPruning | ConnectorCapabilities.PredicatePushdown | ConnectorCapabilities.BoundedWindow
-        | ConnectorCapabilities.InclusiveWatermarkBound | ConnectorCapabilities.Merge | ConnectorCapabilities.ReplaceWrites;
+        | ConnectorCapabilities.InclusiveWatermarkBound | ConnectorCapabilities.Merge | ConnectorCapabilities.ReplaceWrites
+        | ConnectorCapabilities.ReportsStats;
 
     public string ConnectionConfigSchema => """
         { "type": "object", "required": ["url"], "properties": {

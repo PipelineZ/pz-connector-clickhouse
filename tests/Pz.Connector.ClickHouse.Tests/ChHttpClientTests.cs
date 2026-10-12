@@ -138,4 +138,63 @@ public sealed class ChHttpClientTests
         Assert.Contains("unexpected non-JSON answer", ex.Message);
         Assert.DoesNotContain("SECRETBODY", ex.Message, StringComparison.Ordinal);
     }
+
+    [Fact]
+    public async Task Summary_header_of_a_response_is_reported_to_the_ambient_stats()
+    {
+        _fake.Respond = (_, _) =>
+        {
+            var r = new HttpResponseMessage(System.Net.HttpStatusCode.OK);
+            r.Headers.TryAddWithoutValidation("X-ClickHouse-Summary", "{\"read_rows\":\"4\",\"read_bytes\":\"512\",\"elapsed_ns\":\"3000000\"}");
+            return r;
+        };
+        var acc = new ConnectorStatsAccumulator();
+        using (ConnectorStats.Use(acc))
+        {
+            await Client().ExecuteAsync("SELECT 1", "ctx", ChCodes.Read_QueryFailed, default);
+        }
+
+        var s = acc.Snapshot();
+        Assert.Equal(512, s.CostUnits);
+        Assert.Equal(3, s.RemoteMs);
+    }
+
+    [Fact]
+    public async Task Overload_exception_code_on_a_plain_status_counts_one_throttle()
+    {
+        _fake.Respond = (_, _) => FakeHandler.Error(500, 202, "Too many simultaneous queries");
+        var acc = new ConnectorStatsAccumulator();
+        using (ConnectorStats.Use(acc))
+        {
+            await Assert.ThrowsAsync<PzConnectorException>(() => Client().ExecuteAsync("SELECT 1", "ctx", ChCodes.Read_QueryFailed, default));
+        }
+
+        Assert.Equal(1, acc.Snapshot().Throttled);
+    }
+
+    [Fact]
+    public async Task Throttling_statuses_are_left_to_the_http_handler_so_nothing_counts_twice()
+    {
+        _fake.Respond = (_, _) => FakeHandler.Error(429, 202, "Too many simultaneous queries");
+        var acc = new ConnectorStatsAccumulator();
+        using (ConnectorStats.Use(acc))
+        {
+            await Assert.ThrowsAsync<PzConnectorException>(() => Client().ExecuteAsync("SELECT 1", "ctx", ChCodes.Read_QueryFailed, default));
+        }
+
+        Assert.Equal(0, acc.Snapshot().Throttled);
+    }
+
+    [Fact]
+    public async Task Non_overload_failure_counts_no_throttle()
+    {
+        _fake.Respond = (_, _) => FakeHandler.Error(500, 60, "Unknown table");
+        var acc = new ConnectorStatsAccumulator();
+        using (ConnectorStats.Use(acc))
+        {
+            await Assert.ThrowsAsync<PzConnectorException>(() => Client().ExecuteAsync("SELECT 1", "ctx", ChCodes.Read_QueryFailed, default));
+        }
+
+        Assert.Equal(0, acc.Snapshot().Throttled);
+    }
 }

@@ -99,7 +99,7 @@ jobs:
       - name: Install pz, restore from the local feed, run, conformance-test
         run: |
           set -euo pipefail
-          dotnet tool install --global pz --version 0.11.0-preview.4
+          dotnet tool install --global pz --version 0.11.0
           ch() { curl -sf -H 'X-ClickHouse-User: pz' -H "X-ClickHouse-Key: ${PZ_CLICKHOUSE_PASSWORD}" --data-binary "$1" http://localhost:8123/; }
           ch "CREATE DATABASE pz_e2e"
           ch "CREATE TABLE pz_e2e.orders_in (id Int64, name String) ENGINE = MergeTree ORDER BY id"

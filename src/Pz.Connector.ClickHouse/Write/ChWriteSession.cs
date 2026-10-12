@@ -65,7 +65,7 @@ internal sealed class ChWriteSession(
             {
                 case "append":
                     await EnsureTargetAsync(replacing: false, ct).ConfigureAwait(false);
-                    await RunAsync(ChDdl.InsertSelect(target.Target, columns, staging, null, null), "appending", ct, Distributed()).ConfigureAwait(false);
+                    await RunAsync(ChDdl.InsertSelect(target.Target, columns, staging, null, null), "appending", ct, Distributed(), reportRows: true).ConfigureAwait(false);
                     break;
                 case "replace":
                     await ReplaceAsync(ct).ConfigureAwait(false);
@@ -121,7 +121,7 @@ internal sealed class ChWriteSession(
             var fresh = target.Target.WithTable($"{target.Target.Table}__pz_new_{tag}");
             _transient.Add(fresh);
             await RunAsync(Create(fresh, replacing: false), "creating the target", ct).ConfigureAwait(false);
-            await RunAsync(ChDdl.InsertSelect(fresh, columns, staging, null, null), "loading the new table", ct).ConfigureAwait(false);
+            await RunAsync(ChDdl.InsertSelect(fresh, columns, staging, null, null), "loading the new table", ct, reportRows: true).ConfigureAwait(false);
             await RunAsync(ChDdl.Rename(fresh, target.Target, Ddl), "renaming into place", ct).ConfigureAwait(false);
             _transient.Remove(fresh);
             return;
@@ -138,7 +138,7 @@ internal sealed class ChWriteSession(
             await RunAsync(ChDdl.CreateLike(shadowLocal, local.Ref, Ddl, ChDdl.ShadowEngine(local, tag)), "creating the shadow table", ct).ConfigureAwait(false);
             await RunAsync(ChDdl.CreateDistributed(front, shadowLocal, Ddl, target.Existing.DistributedCluster!, target.Existing.ShardingKey),
                 "creating the shadow front", ct).ConfigureAwait(false);
-            await RunAsync(ChDdl.InsertSelect(front, columns, staging, null, null), "loading the shadow table", ct, Distributed(force: true)).ConfigureAwait(false);
+            await RunAsync(ChDdl.InsertSelect(front, columns, staging, null, null), "loading the shadow table", ct, Distributed(force: true), reportRows: true).ConfigureAwait(false);
             await RunAsync(ChDdl.Exchange(local.Ref, shadowLocal, Ddl), "swapping the tables", ct).ConfigureAwait(false);
             return;
         }
@@ -146,7 +146,7 @@ internal sealed class ChWriteSession(
         var shadow = target.Target.WithTable($"{target.Target.Table}__pz_new_{tag}");
         _transient.Add(shadow);
         await RunAsync(ChDdl.CreateLike(shadow, target.Target, Ddl, ChDdl.ShadowEngine(target.Existing, tag)), "creating the shadow table", ct).ConfigureAwait(false);
-        await RunAsync(ChDdl.InsertSelect(shadow, columns, staging, null, null), "loading the shadow table", ct).ConfigureAwait(false);
+        await RunAsync(ChDdl.InsertSelect(shadow, columns, staging, null, null), "loading the shadow table", ct, reportRows: true).ConfigureAwait(false);
         await RunAsync(ChDdl.Exchange(target.Target, shadow, Ddl), "swapping the tables", ct).ConfigureAwait(false);
     }
 
@@ -169,7 +169,7 @@ internal sealed class ChWriteSession(
         }
 
         long? version = merge.SupplyVersion ? (time.GetUtcNow().UtcTicks - DateTimeOffset.UnixEpoch.UtcTicks) / 10 : null;
-        await RunAsync(ChDdl.InsertSelect(target.Target, columns, staging, spec.Keys, version), "merging", ct, Distributed()).ConfigureAwait(false);
+        await RunAsync(ChDdl.InsertSelect(target.Target, columns, staging, spec.Keys, version), "merging", ct, Distributed(), reportRows: true).ConfigureAwait(false);
     }
 
     private async Task EnsureTargetAsync(bool replacing, CancellationToken ct)
@@ -201,8 +201,8 @@ internal sealed class ChWriteSession(
         return s;
     }
 
-    private Task RunAsync(string sql, string step, CancellationToken ct, Dictionary<string, string>? settings = null) =>
-        client.ExecuteAsync(sql, $"{context}: {step}", ChCodes.Write_CommitFailed, ct, Settings(settings));
+    private Task RunAsync(string sql, string step, CancellationToken ct, Dictionary<string, string>? settings = null, bool reportRows = false) =>
+        client.ExecuteAsync(sql, $"{context}: {step}", ChCodes.Write_CommitFailed, ct, Settings(settings), reportRows);
 
     private async Task CleanupAsync()
     {

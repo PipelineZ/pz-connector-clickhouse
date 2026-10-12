@@ -13,7 +13,7 @@ internal static class ChSummary
 {
     private const string Header = "X-ClickHouse-Summary";
 
-    public static void Report(HttpResponseMessage response, IConnectorStats stats)
+    public static void Report(HttpResponseMessage response, IConnectorStats stats, bool reportRows)
     {
         if (!response.Headers.TryGetValues(Header, out var values) || values.FirstOrDefault() is not { } json)
         {
@@ -63,6 +63,11 @@ internal static class ChSummary
         if (elapsedNs > 0)
         {
             stats.AddRemoteMs(elapsedNs / 1_000_000);
+        }
+
+        if (!reportRows)
+        {
+            return;
         }
 
         if (readRows > 0)

@@ -99,7 +99,7 @@ jobs:
       - name: Install pz, restore from the local feed, run, conformance-test
         run: |
           set -euo pipefail
-          dotnet tool install --global pz --version 0.11.0-preview.1
+          dotnet tool install --global pz --version 0.11.0-preview.2
           ch() { curl -sf -H 'X-ClickHouse-User: pz' -H "X-ClickHouse-Key: ${PZ_CLICKHOUSE_PASSWORD}" --data-binary "$1" http://localhost:8123/; }
           ch "CREATE DATABASE pz_e2e"
           ch "CREATE TABLE pz_e2e.orders_in (id Int64, name String) ENGINE = MergeTree ORDER BY id"
@@ -117,8 +117,8 @@ jobs:
           test "$(ch 'SELECT count() FROM pz_e2e.orders_out')" -eq 6
           test "$(ch 'SELECT count() FROM pz_e2e.orders_latest FINAL')" -eq 3
           test "$(ch "SELECT count() FROM system.tables WHERE database = 'pz_e2e' AND startsWith(name, '_pz_')")" -eq 0
-          # The connector reports its remote activity: every clickhouse node of the newest run made requests.
+          # The connector reports its remote activity: all three clickhouse nodes (one read, two writes) of the newest run made requests.
           RUN_DIR="$(ls -td .pz/runs/*/ | head -n 1)"
-          jq -e '[.nodes[] | select(.connector=="clickhouse") | .remote.requests > 0] | all' "${RUN_DIR}run_results.json"
+          jq -e '[.nodes[] | select(.connector=="clickhouse")] | (length == 3) and (map(.remote.requests > 0) | all)' "${RUN_DIR}run_results.json"
           pz connector test "${PKG_DIR}" --config probe.yml | tee report.txt
           if grep -q FAIL report.txt; then exit 1; fi

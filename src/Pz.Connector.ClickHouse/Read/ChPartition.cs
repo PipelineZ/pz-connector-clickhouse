@@ -21,6 +21,7 @@ internal sealed class ChPartition(ChHttpClient client, ChReadPlan plan, ChReadCo
             Parameters = plan.Parameters,
             Settings = ChReadPlan.Settings(config, options),
             QueryId = queryId,
+            ReportRows = true,
         }, ct).ConfigureAwait(false);
         await using var body = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
 

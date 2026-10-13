@@ -15,6 +15,9 @@ internal static partial class ChErrors
     /// concurrent queries, and Keeper exceptions.</summary>
     public static bool IsTransientCode(int code) => code is 159 or 209 or 210 or 242 or 252 or 202 or 999;
 
+    /// <summary>Codes by which the server says it is shedding load (too many simultaneous queries, too many parts); counted as throttling.</summary>
+    public static bool IsOverloadCode(int code) => code is 202 or 252;
+
     private static bool IsAuthCode(int code) => code is 516 or 192 or 194;
 
     public static int? ParseExceptionCode(string text)

@@ -15,6 +15,11 @@ internal sealed record ChRequest(string Context, string FailCode)
     public IReadOnlyDictionary<string, string>? Settings { get; init; }
     public IReadOnlyDictionary<string, string>? Parameters { get; init; }
     public string QueryId { get; init; } = ChHttpClient.NewQueryId();
+
+    /// <summary>True only for the statement that moves the node's data (the source read, the final
+    /// landing statement of a write): its row counts are the node's rows. Lookups, probes, DDL and the
+    /// staging insert still report cost and server time but no row extras.</summary>
+    public bool ReportRows { get; init; }
 }
 
 /// <summary>The only code that speaks ClickHouse's HTTP interface. Every request is a POST to the
@@ -32,8 +37,9 @@ internal sealed class ChHttpClient(HttpClient http, ChConnectionConfig cfg, ILog
     public static string NewQueryId() => "pz-" + Guid.NewGuid().ToString("N");
 
     /// <summary>No overall timeout: a read or an insert is arbitrarily large, so the engine's
-    /// cancellation token is the only cutoff. A connect timeout stays so a black-holed host fails.</summary>
-    public static HttpClient Create(ChConnectionConfig cfg)
+    /// cancellation token is the only cutoff. A connect timeout stays so a black-holed host fails.
+    /// <paramref name="wrap"/> decorates the transport (the SDK's span and request-counting handler).</summary>
+    public static HttpClient Create(ChConnectionConfig cfg, Func<HttpMessageHandler, HttpMessageHandler>? wrap = null)
     {
         var handler = new SocketsHttpHandler
         {
@@ -78,7 +84,7 @@ internal sealed class ChHttpClient(HttpClient http, ChConnectionConfig cfg, ILog
             };
         }
 
-        return new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
+        return new HttpClient(wrap is null ? handler : wrap(handler)) { Timeout = Timeout.InfiniteTimeSpan };
     }
 
     public async Task<HttpResponseMessage> SendAsync(ChRequest request, CancellationToken ct)
@@ -110,6 +116,10 @@ internal sealed class ChHttpClient(HttpClient http, ChConnectionConfig cfg, ILog
             throw ChErrors.Wrap(ex, cfg.Redactor, $"{request.Context} (query_id {request.QueryId})");
         }
 
+        // Taken here, on the operation's own flow, never from a callback thread.
+        var stats = ConnectorStats.Current;
+        ChSummary.Report(response, stats, request.ReportRows);
+
         if (response.IsSuccessStatusCode)
         {
             return response;
@@ -122,15 +132,23 @@ internal sealed class ChHttpClient(HttpClient http, ChConnectionConfig cfg, ILog
                 && int.TryParse(values.FirstOrDefault(), out var headerCode)
                 ? headerCode
                 : ChErrors.ParseExceptionCode(body);
+
+            // The HTTP handler already counts 429 and 503; only overload signalled through the
+            // exception code on any other status is added here.
+            if (code is { } c && ChErrors.IsOverloadCode(c) && (int)response.StatusCode is not (429 or 503))
+            {
+                stats.AddThrottled(1);
+            }
+
             throw ChErrors.FromServer((int)response.StatusCode, code, body, response.Headers.RetryAfter?.Delta, cfg.Redactor,
                 $"{request.Context} (query_id {request.QueryId})", request.FailCode);
         }
     }
 
     public async Task ExecuteAsync(string sql, string context, string failCode, CancellationToken ct,
-        IReadOnlyDictionary<string, string>? settings = null)
+        IReadOnlyDictionary<string, string>? settings = null, bool reportRows = false)
     {
-        using var response = await SendAsync(new ChRequest(context, failCode) { Sql = sql, Settings = settings }, ct).ConfigureAwait(false);
+        using var response = await SendAsync(new ChRequest(context, failCode) { Sql = sql, Settings = settings, ReportRows = reportRows }, ct).ConfigureAwait(false);
         // Drain so the server-side query is complete (and its errors surfaced) before returning.
         await response.Content.CopyToAsync(Stream.Null, ct).ConfigureAwait(false);
     }

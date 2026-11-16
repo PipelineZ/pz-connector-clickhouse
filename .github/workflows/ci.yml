@@ -28,7 +28,7 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-dotnet@v6
         with:
-          dotnet-version: '10.0.x'
+          dotnet-version: '11.0.x'
       - run: dotnet build Pz.Connector.ClickHouse.slnx -c Release
       # The 2x2 cluster suite needs five containers and minutes of boot; it runs in its own job.
       # On windows every docker suite SKIPs: DockerFacts finds no daemon able to run Linux images.
@@ -45,7 +45,7 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-dotnet@v6
         with:
-          dotnet-version: '10.0.x'
+          dotnet-version: '11.0.x'
       - run: dotnet build Pz.Connector.ClickHouse.slnx -c Release
       - run: >
           dotnet test Pz.Connector.ClickHouse.slnx -c Release --no-build --filter "Category=ClickHouseCluster"
@@ -76,7 +76,7 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-dotnet@v6
         with:
-          dotnet-version: '10.0.x'
+          dotnet-version: '11.0.x'
       - name: Publish the host RID (Native AOT) and pack
         run: |
           set -euo pipefail

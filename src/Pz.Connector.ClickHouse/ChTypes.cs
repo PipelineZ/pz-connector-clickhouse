@@ -62,7 +62,7 @@ internal static partial class ChTypes
             return null;
         }
 
-        var isContainer = field.DataType is ListType or LargeListType or StructType or MapType;
+        var isContainer = field.DataType is ListType or LargeListType or FixedSizeListType or StructType or MapType;
         return field.IsNullable && !forceNotNull && !isContainer ? $"Nullable({inner})" : inner;
     }
 
@@ -96,6 +96,8 @@ internal static partial class ChTypes
                 return Child(l.ValueField, out error) is { } item ? $"Array({item})" : null;
             case LargeListType l:
                 return Child(l.ValueField, out error) is { } largeItem ? $"Array({largeItem})" : null;
+            case FixedSizeListType l:
+                return Child(l.ValueField, out error) is { } fixedItem ? $"Array({fixedItem})" : null;
             case StructType s:
             {
                 var parts = new List<string>();
@@ -135,7 +137,7 @@ internal static partial class ChTypes
             return null;
         }
 
-        var isContainer = f.DataType is ListType or LargeListType or StructType or MapType;
+        var isContainer = f.DataType is ListType or LargeListType or FixedSizeListType or StructType or MapType;
         return f.IsNullable && !isContainer ? $"Nullable({inner})" : inner;
     }
 

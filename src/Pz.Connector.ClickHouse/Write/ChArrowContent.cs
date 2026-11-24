@@ -2,6 +2,7 @@ using System.Net;
 using Apache.Arrow;
 using Apache.Arrow.Ipc;
 using Apache.Arrow.Types;
+using Pz.Connectors.Abstractions.Batches;
 
 namespace Pz.Connector.ClickHouse;
 
@@ -13,6 +14,78 @@ namespace Pz.Connector.ClickHouse;
 internal sealed class ChArrowContent(RecordBatch batch, long? firstSequence) : HttpContent
 {
     protected override async Task SerializeToStreamAsync(Stream stream, TransportContext? context, CancellationToken ct)
+    {
+        var owned = ListifyFixedSizeLists(batch);
+        try
+        {
+            await SerializeAsync(stream, owned ?? batch, ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            owned?.Dispose();
+        }
+    }
+
+    /// <summary>ClickHouse's Arrow reader has no fixed-size list: it reads one as a variable list and
+    /// rejects it, because the offsets buffer is missing. A batch holding one (at any depth) is rebuilt
+    /// with plain lists, and a null fixed-size list becomes an empty list, as every null container does
+    /// on this sink. Null when the batch needs no rewrite.</summary>
+    private static RecordBatch? ListifyFixedSizeLists(RecordBatch source)
+    {
+        if (!source.Schema.FieldsList.Any(f => HasFixedSizeList(f.DataType)))
+        {
+            return null;
+        }
+
+        var schema = new Schema(source.Schema.FieldsList.Select(f => new Field(f.Name, Listify(f.DataType), f.IsNullable)), source.Schema.Metadata);
+        var builder = new ArrowBatchBuilder(schema, int.MaxValue, maxRowsPerBatch: int.MaxValue);
+        var row = new object?[source.ColumnCount];
+        for (var i = 0; i < source.Length; i++)
+        {
+            for (var c = 0; c < row.Length; c++)
+            {
+                row[c] = Boxed(source.Column(c).Data.DataType, ArrowCell.GetValue(source.Column(c), i));
+            }
+
+            builder.AppendRow(row);
+        }
+
+        return builder.Flush() ?? new RecordBatch(schema, schema.FieldsList.Select(f => ArrowArrayFactory.BuildArray(new ArrayData(f.DataType, 0, 0, 0, []))), 0);
+    }
+
+    /// <summary><see cref="ArrowCell.GetValue"/> returns a map as key/value pairs; the builder takes a dictionary.</summary>
+    private static object? Boxed(IArrowType type, object? value) => (type, value) switch
+    {
+        (_, null) => null,
+        (MapType m, List<KeyValuePair<object, object?>> pairs) =>
+            pairs.ToDictionary(p => p.Key, p => Boxed(m.ValueField.DataType, p.Value)),
+        (FixedSizeListType l, List<object?> items) => items.Select(v => Boxed(l.ValueDataType, v)).ToList(),
+        (ListType l, List<object?> items) => items.Select(v => Boxed(l.ValueDataType, v)).ToList(),
+        (StructType s, Dictionary<string, object?> fields) =>
+            fields.ToDictionary(kv => kv.Key, kv => Boxed(s.GetFieldByName(kv.Key).DataType, kv.Value)),
+        _ => value,
+    };
+
+    private static bool HasFixedSizeList(IArrowType type) => type switch
+    {
+        FixedSizeListType => true,
+        ListType l => HasFixedSizeList(l.ValueDataType),
+        LargeListType l => HasFixedSizeList(l.ValueDataType),
+        StructType s => s.Fields.Any(f => HasFixedSizeList(f.DataType)),
+        MapType m => HasFixedSizeList(m.KeyField.DataType) || HasFixedSizeList(m.ValueField.DataType),
+        _ => false,
+    };
+
+    private static IArrowType Listify(IArrowType type) => type switch
+    {
+        FixedSizeListType l => new ListType(new Field(l.ValueField.Name, Listify(l.ValueDataType), l.ValueField.IsNullable)),
+        ListType l => new ListType(new Field(l.ValueField.Name, Listify(l.ValueDataType), l.ValueField.IsNullable)),
+        StructType s => new StructType(s.Fields.Select(f => new Field(f.Name, Listify(f.DataType), f.IsNullable)).ToList()),
+        MapType m => new MapType(new Field(m.KeyField.Name, Listify(m.KeyField.DataType), false), new Field(m.ValueField.Name, Listify(m.ValueField.DataType), m.ValueField.IsNullable)),
+        _ => type,
+    };
+
+    private async Task SerializeAsync(Stream stream, RecordBatch batch, CancellationToken ct)
     {
         if (firstSequence is not { } first)
         {

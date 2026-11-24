@@ -44,6 +44,8 @@ public sealed class ChTypesWriteTests
         var st = new StructType([new Field("a", Int32Type.Default, false), new Field("b c", StringType.Default, true)]);
         Assert.Equal("Tuple(`a` Int32, `b c` Nullable(String))", Ddl(st, nullable: true));
 
+        Assert.Equal("Array(Nullable(Int32))", Ddl(new FixedSizeListType(new Field("item", Int32Type.Default, true), 3), nullable: true));
+
         var map = new MapType(new Field("key", StringType.Default, false), new Field("value", Int64Type.Default, true));
         Assert.Equal("Map(String, Nullable(Int64))", Ddl(map));
     }

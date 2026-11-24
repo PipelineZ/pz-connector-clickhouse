@@ -17,7 +17,8 @@ public sealed class ChConnectorTests
     {
         var expected = ConnectorCapabilities.ColumnPruning | ConnectorCapabilities.PredicatePushdown
             | ConnectorCapabilities.BoundedWindow | ConnectorCapabilities.InclusiveWatermarkBound
-            | ConnectorCapabilities.Merge | ConnectorCapabilities.ReplaceWrites | ConnectorCapabilities.ReportsStats;
+            | ConnectorCapabilities.Merge | ConnectorCapabilities.ReplaceWrites | ConnectorCapabilities.ReportsStats
+            | ConnectorCapabilities.NestedTypes;
         Assert.Equal(expected, new ChConnector().Capabilities);
     }
 }

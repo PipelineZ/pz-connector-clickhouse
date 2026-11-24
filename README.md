@@ -105,7 +105,7 @@ without an offset is read as UTC.
 | `LowCardinality(T)` | T (no dictionary) |
 | `Enum8/16`, `UUID`, `IPv4`, `IPv6`, `JSON`, `Dynamic`, `Variant`, `Object` | utf8 (`toString`) |
 | `(U)Int128`, `(U)Int256` | utf8 (`toString`) |
-| `Array(T)`, `Tuple(...)`, `Map(K, V)` | list, struct, map (utf8 when an element needs a cast) |
+| `Array(T)`, `Tuple(...)`, `Map(K, V)` | list, struct, map, nesting freely, with `Nullable` and `LowCardinality` inside (utf8 in ClickHouse's text form when an element needs a cast, such as `Array(Date)` or a `UUID` inside a tuple); an unnamed `Tuple(Int32, String)` becomes a struct with fields `1`, `2` |
 | `Interval*`, `Time`, `Time64`, `AggregateFunction`, `SimpleAggregateFunction`, `Nothing` | refused, naming the column (PZCH0204) |
 
 ## Writing
@@ -155,7 +155,7 @@ ClickHouse has none across statements.
 | fixed_size_binary(n) | `FixedString(n)` |
 | date32, date64 | `Date32` |
 | timestamp(unit, tz) | `DateTime64(0/3/6/9, 'tz')`; without a timezone, `DateTime64(p)` in the server timezone |
-| list, struct, map | `Array(T)`, `Tuple(name T, ...)`, `Map(K, V)` |
+| list, fixed-size list, struct, map | `Array(T)`, `Array(T)`, `Tuple(name T, ...)`, `Map(K, V)` |
 | nullable field | `Nullable(T)` |
 | dictionary, union, duration, interval, null, time32, time64 | refused (PZCH0303) |
 
@@ -183,8 +183,13 @@ The names `_pz_seq` and `_pz_version` are reserved (PZCH0308).
 - **On a cluster, replace swaps each node in turn.** For an instant, a read through the `Distributed`
   table can mix old and new shards.
 - **On a cluster, staging data is copied to every node.** Large writes pay that replication cost.
-- **A null list, map or struct lands as empty or default**, because ClickHouse forbids `Nullable`
-  arrays, maps and tuples. Nullability inside the container is kept.
+- **A null list, fixed-size list, map or struct lands as empty or default** (`[]`, `{}`, a tuple of
+  default or NULL fields), because ClickHouse forbids `Nullable` arrays, maps and tuples. Nullability
+  inside the container is kept. Nested columns are written natively, not as JSON text; a fixed-size
+  list is sent as a plain list because ClickHouse's Arrow reader has no fixed-size list.
+- **An existing target is not type-checked.** Only column presence is (PZCH0304); a nested column
+  whose ClickHouse type differs from what the pipeline writes is left to ClickHouse's own insert
+  conversion and errors.
 - **Time, interval and dictionary columns are refused** (PZCH0303).
 - **Append is at-least-once.** A retried write can land its rows twice; use `merge` for effectively-once.
 
